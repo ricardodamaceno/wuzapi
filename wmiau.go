@@ -815,6 +815,16 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 
 		postmap["type"] = "Message"
 		dowebhook = 1
+		if evt.Message.GetPollUpdateMessage() != nil {
+			pollVote, err := mycli.WAClient.DecryptPollVote(context.Background(), evt)
+			if err == nil {
+				// Adiciona o voto legível ao JSON
+				postmap["pollVote"] = pollVote
+				log.Info().Interface("vote", pollVote).Msg("Voto de enquete descriptografado com sucesso")
+			} else {
+				log.Error().Err(err).Msg("Falha ao descriptografar voto de enquete")
+			}
+		}
 		metaParts := []string{fmt.Sprintf("pushname: %s", evt.Info.PushName), fmt.Sprintf("timestamp: %s", evt.Info.Timestamp)}
 		if evt.Info.Type != "" {
 			metaParts = append(metaParts, fmt.Sprintf("type: %s", evt.Info.Type))
@@ -1752,6 +1762,22 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		postmap["type"] = "UndecryptableMessage"
 		dowebhook = 1
 		log.Warn().Str("info", evt.Info.SourceString()).Msg("Undecryptable message received")
+		go func() {
+			// Espera aleatória pequena para não parecer spam se forem muitas mensagens
+			time.Sleep(time.Duration(500) * time.Millisecond)
+
+			// Constrói a requisição de "Mensagem Indisponível"
+			retryMsg := mycli.WAClient.BuildUnavailableMessageRequest(evt.Info.Chat, evt.Info.Sender, evt.Info.ID)
+
+			// Envia a solicitação (Peer: true é importante aqui)
+			_, err := mycli.WAClient.SendMessage(context.Background(), evt.Info.Chat, retryMsg, whatsmeow.SendRequestExtra{Peer: true})
+
+			if err != nil {
+				log.Error().Err(err).Str("id", evt.Info.ID).Msg("Falha ao solicitar reenvio de mensagem")
+			} else {
+				log.Info().Str("id", evt.Info.ID).Msg("Solicitação de reenvio enviada com sucesso (Unavailable Request)")
+			}
+		}()
 	case *events.MediaRetry:
 		postmap["type"] = "MediaRetry"
 		dowebhook = 1
